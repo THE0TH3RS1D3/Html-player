@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pocket Arcade</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Arcade">
+<meta name="theme-color" content="#ece8f5">
+<style>
+:root{
+  --bg:#ece8f5; --ink:#1d1730; --muted:#6b6483; --card:#fff; --blue:#2f3cff; --butter:#ffd84d; --line:#d6cfe6;
+  --font: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+main{max-width:640px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:2rem;line-height:1.1;margin:8px 0 4px;letter-spacing:-.02em}
+.sub{color:var(--muted);margin:0 0 20px;line-height:1.4}
+.add{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:16px;border:0;border-radius:18px;
+  background:var(--blue);color:#fff;font:700 1.05rem var(--font);cursor:pointer}
+.add:active{transform:scale(.98)}
+.add input{display:none}
+.msg{min-height:1.4em;margin:10px 2px;font-size:.9rem;color:var(--muted)}
+.msg.err{color:#c2185b}
+ul{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:10px}
+li{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px}
+.tile{flex:none;width:52px;height:52px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:1.4rem;color:#fff}
+.play{flex:1;min-width:0;text-align:left;background:none;border:0;padding:6px 4px;font:inherit;color:inherit;cursor:pointer}
+.play b{display:block;font-size:1.05rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.play small{color:var(--muted)}
+.icon{flex:none;border:0;background:#f3f0fa;color:var(--ink);border-radius:10px;padding:10px 12px;font:600 .85rem var(--font);cursor:pointer}
+.icon.del{color:#c2185b}
+.empty{text-align:center;color:var(--muted);padding:36px 12px;border:2px dashed var(--line);border-radius:16px;line-height:1.5}
+.tip{margin-top:28px;font-size:.85rem;color:var(--muted);line-height:1.5}
+
+/* player */
+#player{position:fixed;inset:0;background:#000;z-index:10;display:none}
+#player.on{display:block}
+#frame{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
+#menuBtn{position:absolute;top:calc(env(safe-area-inset-top) + 6px);right:6px;width:40px;height:40px;border-radius:50%;
+  border:0;background:rgba(29,23,48,.55);color:#fff;font:700 18px var(--font);opacity:.55;z-index:2;cursor:pointer;
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+#menu{position:absolute;top:calc(env(safe-area-inset-top) + 52px);right:6px;display:none;z-index:3;
+  background:var(--card);border-radius:14px;padding:6px;box-shadow:0 8px 30px rgba(0,0,0,.35);min-width:150px}
+#menu.on{display:block}
+#menu button{display:block;width:100%;text-align:left;border:0;background:none;padding:12px 14px;font:600 1rem var(--font);color:var(--ink);border-radius:10px}
+#menu button:active{background:#f3f0fa}
+body.playing{overflow:hidden;position:fixed;width:100%}
+</style>
+</head>
+<body>
+<main>
+  <h1>Pocket Arcade</h1>
+  <p class="sub">Import HTML games from your phone and play them full screen. Everything stays on this device.</p>
+
+  <label class="add">
+    Import HTML files
+    <input id="file" type="file" multiple accept=".html,.htm,text/html">
+  </label>
+  <div id="msg" class="msg" role="status"></div>
+
+  <ul id="list"></ul>
+
+  <p class="tip">Tip: in Safari tap Share, then Add to Home Screen. Opened from the home screen, games run without the browser bars. Each game must be a single .html file with its code, styles and images included.</p>
+</main>
+
+<div id="player" aria-label="Game">
+  <iframe id="frame" title="Game"
+    allow="autoplay; fullscreen; gamepad; accelerometer; gyroscope; clipboard-write"
+    sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-pointer-lock allow-popups allow-downloads"></iframe>
+  <button id="menuBtn" aria-label="Game menu">&#8942;</button>
+  <div id="menu">
+    <button id="reload">Restart game</button>
+    <button id="exit">Back to library</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  var DB='pocket-arcade', STORE='games', db;
+  var $=function(id){return document.getElementById(id)};
+  var list=$('list'), msg=$('msg'), current=null;
+
+  function open(){
+    return new Promise(function(res,rej){
+      var r=indexedDB.open(DB,1);
+      r.onupgradeneeded=function(){r.result.createObjectStore(STORE,{keyPath:'id',autoIncrement:true})};
+      r.onsuccess=function(){res(r.result)};
+      r.onerror=function(){rej(r.error)};
+    });
+  }
+  function tx(mode,fn){
+    return new Promise(function(res,rej){
+      var t=db.transaction(STORE,mode), s=t.objectStore(STORE), out=fn(s);
+      t.oncomplete=function(){res(out&&out.result)};
+      t.onerror=t.onabort=function(){rej(t.error)};
+    });
+  }
+  var all=function(){return tx('readonly',function(s){return s.getAll()})};
+  var get=function(id){return tx('readonly',function(s){return s.get(id)})};
+  var put=function(g){return tx('readwrite',function(s){return s.put(g)})};
+  var del=function(id){return tx('readwrite',function(s){return s.delete(id)})};
+
+  function say(t,err){msg.textContent=t||'';msg.className='msg'+(err?' err':'')}
+  function esc(s){return s.replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  function hue(s){var h=0;for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%360;return h}
+  function size(n){return n>1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB'}
+
+  function titleOf(html,fallback){
+    var m=html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    var t=m&&m[1].trim();
+    return t||fallback.replace(/\.(html?|HTML?)$/,'');
+  }
+
+  async function render(){
+    var games=(await all()).sort(function(a,b){return b.added-a.added});
+    if(!games.length){
+      list.innerHTML='<li class="empty" style="display:block">No games yet. Tap Import HTML files and choose one from Files, iCloud Drive or Downloads.</li>';
+      return;
+    }
+    list.innerHTML=games.map(function(g){
+      var letter=esc((g.title.trim()[0]||'?').toUpperCase());
+      return '<li data-id="'+g.id+'">'+
+        '<div class="tile" style="background:hsl('+hue(g.title)+' 62% 46%)">'+letter+'</div>'+
+        '<button class="play" data-act="play"><b>'+esc(g.title)+'</b><small>'+size(g.size)+'</small></button>'+
+        '<button class="icon" data-act="rename">Rename</button>'+
+        '<button class="icon del" data-act="del">Delete</button></li>';
+    }).join('');
+  }
+
+  $('file').addEventListener('change',async function(e){
+    var files=Array.prototype.slice.call(e.target.files||[]), ok=0, bad=[];
+    for(var i=0;i<files.length;i++){
+      var f=files[i];
+      try{
+        var text=await f.text();
+        if(!/<\w+/.test(text)) throw new Error('not html');
+        await put({title:titleOf(text,f.name),html:text,size:f.size,added:Date.now()+i});
+        ok++;
+      }catch(err){bad.push(f.name)}
+    }
+    e.target.value='';
+    say(ok?('Added '+ok+' '+(ok===1?'game':'games')+'.'):'', false);
+    if(bad.length) say('Could not read: '+bad.join(', '),true);
+    render();
+  });
+
+  list.addEventListener('click',async function(e){
+    var b=e.target.closest('button'); if(!b) return;
+    var li=b.closest('li'), id=Number(li.dataset.id), act=b.dataset.act;
+    if(act==='play') play(id);
+    if(act==='rename'){
+      var g=await get(id), n=prompt('Rename game',g.title);
+      if(n&&n.trim()){g.title=n.trim();await put(g);render()}
+    }
+    if(act==='del'){
+      var g2=await get(id);
+      if(confirm('Delete "'+g2.title+'" from this device?')){await del(id);render()}
+    }
+  });
+
+  var player=$('player'), frame=$('frame'), menu=$('menu');
+  async function play(id){
+    var g=await get(id); if(!g) return;
+    current=g;
+    frame.srcdoc=g.html;
+    player.classList.add('on'); document.body.classList.add('playing');
+    menu.classList.remove('on');
+  }
+  function exit(){
+    frame.srcdoc=''; frame.removeAttribute('srcdoc');
+    player.classList.remove('on'); document.body.classList.remove('playing');
+    menu.classList.remove('on'); current=null;
+  }
+  $('menuBtn').addEventListener('click',function(){menu.classList.toggle('on')});
+  $('exit').addEventListener('click',exit);
+  $('reload').addEventListener('click',function(){
+    if(!current) return; menu.classList.remove('on');
+    frame.srcdoc=''; setTimeout(function(){frame.srcdoc=current.html},50);
+  });
+
+  // stop page bounce/zoom gestures behind the game
+  document.addEventListener('gesturestart',function(e){if(player.classList.contains('on'))e.preventDefault()});
+
+  open().then(function(d){db=d;render()}).catch(function(){
+    say('Storage is unavailable (private browsing?). Games cannot be saved here.',true);
+  });
+
+  if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(function(){})}
+})();
+</script>
+</body>
+</html>
